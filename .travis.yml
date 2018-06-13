@@ -15,4 +15,4 @@ jobs:
     - stage: lint
       script: flake8 pikciopou/
     - stage: test
-      script: pytest --cov-report term-missing --cov=pikciopou/ && codecov --token=4af09746-3d48-4c50-8b24-0f9dead6bd3f
+      script: pytest --cov-report term-missing --cov=pikciopou/ && codecov --token=a39279c8-e246-4635-b657-e0b95df04bb3

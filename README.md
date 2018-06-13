@@ -1,7 +1,7 @@
 # Pikcio - Proof of Usage
 
-[![Build Status](https://travis-ci.com/Didiercc/Proof_of_Usage.svg?token=9rPJ6zo5nsANbGUSdvQW&branch=master)](https://travis-ci.com/Didiercc/Proof_of_Usage)
-[![Coverage Status](https://codecov.io/gh/Didiercc/Proof_of_Usage/branch/master/graph/badge.svg)](https://codecov.io/gh/Didiercc/Proof_of_Usage)
+[![Build Status](https://travis-ci.com/Pikciochain/Proof_of_Usage.svg?token=9rPJ6zo5nsANbGUSdvQW&branch=master)](https://travis-ci.com/Pikciochain/Proof_of_Usage)
+[![Coverage Status](https://codecov.io/gh/Pikciochain/Proof_of_Usage/branch/master/graph/badge.svg)](https://codecov.io/gh/Pikciochain/Proof_of_Usage)
 
 This project demonstrates how **Pikcio** uses a **Proof of Usage** as a good
 alternative to the original *Proof of Work* and the more recent
