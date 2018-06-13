@@ -1,0 +1,18 @@
+env:
+  global:
+    - CC_TEST_REPORTER_ID=787a2f89b15c637323c7340d65ec17e898ac44480706b4b4122ea040c2a88f1d
+
+language: python
+
+python:
+  - "3.6"
+
+install:
+  - pip install -r dev-requirements.txt
+
+jobs:
+  include:
+    - stage: lint
+      script: flake8 pikciopou/
+    - stage: test
+      script: pytest --cov-report term-missing --cov=pikciopou/ && codecov --token=4af09746-3d48-4c50-8b24-0f9dead6bd3f

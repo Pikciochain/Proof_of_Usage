@@ -1,0 +1,9 @@
+-r ./requirements.txt
+bumpversion==0.5.3
+flake8==3.3.0
+ipdb==0.10.3
+pytest==3.3.2
+pytest-cov==2.5.1
+mock>=2.0.0
+pytest-pythonpath==0.7.1
+codecov

@@ -1,0 +1,3 @@
+requests
+flask
+pycryptodome==3.6.1
