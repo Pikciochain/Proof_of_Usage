@@ -1,4 +1,4 @@
 requests
 flask
 pycryptodome==3.6.1
--e git+git@github.com:Pikciochain/SmartContract.git@9c7d456167aa29d335082d80194f2c6d22107b83#egg=pikciosc
+-e git+git://github.com/Pikciochain/SmartContract.git@9c7d456167aa29d335082d80194f2c6d22107b83#egg=pikciosc
