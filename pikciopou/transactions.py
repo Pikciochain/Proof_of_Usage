@@ -1,9 +1,10 @@
 """Contains all transaction related features."""
-import json
 from datetime import datetime
-from json import JSONDecodeError
+
+from pikciosc.models import ExecutionInfo
 
 from pikciopou import crypto
+from pikciopou.serialization import JSONSerializable
 
 TYPE_TX = 'PKC'
 """Normal transaction."""
@@ -20,12 +21,54 @@ TYPE_CASHING = 'PKC-Cashing'
 redistributed to stakeholders.
 """
 
+TYPE_SC_SUBMIT = "PKC-SC-Submit"
+"""Transaction used to submit a smart contract to the ledger."""
+TYPE_SC_INVOKE = "PKC-SC-Invoke"
+"""Transaction used to invoke a smart contract."""
+TYPE_SC_EXEC = "PKC-SC-Exec"
+"""Transaction used to detail a smart contract execution."""
 
-class TransactionContent(object):
+
+class MetaTXContent(type):
+    """Metaclass used to register real type to perform JSON deserialisation of
+    a transaction content."""
+
+    TxTypeToTypeMapping = {}
+
+    def __new__(mcs, name, bases, attrs):
+        # Special case: do not register the base class to avoid infinite loop.
+        if name == 'TransactionContent':
+            return super().__new__(mcs, name, bases, attrs)
+
+        # Sub classes must define a specific type.
+        if 'TX_TYPE' not in attrs:
+            raise AttributeError('TX_TYPE attribute is required'
+                                 ' in class {}'.format(name))
+        cls = super().__new__(mcs, name, bases, attrs)
+        mcs.TxTypeToTypeMapping[attrs['TX_TYPE']] = cls
+        return cls
+
+
+class TransactionContent(JSONSerializable, metaclass=MetaTXContent):
     """The transaction core, without signature or the validation details"""
 
     def __init__(self, sender_id, recipient_id, amount, tx_type=TYPE_TX,
                  tx_time=None, tx_id=None):
+        """Creates a new TransactionContent with provided parameters.
+
+        :param sender_id: The id of the node sending the transaction.
+        :type sender_id: str
+        :param recipient_id: The id of the node receiving the transaction.
+        :type recipient_id: str
+        :param amount: The amount of transferred money.
+        :type amount: float
+        :param tx_type: Meaning of the transaction.
+        :type tx_type: str
+        :param tx_time: Timestamp of the emission.
+        :type tx_time: float
+        :param tx_id: Id of the created transaction.
+        :type tx_id: str
+        """
         self.tx_id = tx_id or crypto.get_hash()
         self.type = tx_type
         self.sender_id = sender_id
@@ -33,35 +76,15 @@ class TransactionContent(object):
         self.amount = amount
         self.emission_time = tx_time or datetime.utcnow().timestamp()
 
-    def to_json(self):
-        """Provides a JSON representation of this transaction content."""
-        return json.dumps(self.__dict__)
-
     @classmethod
-    def from_json(cls, json_content):
-        """Creates a new TransactionContent from provided JSON string.
-
-        :param json_content: The JSON version of a TransactionContent.
-        :type json_content: str
-        """
-        try:
-            return cls.from_dict(json.loads(json_content))
-        except (TypeError, JSONDecodeError):
-            return None
-
-    @classmethod
-    def from_dict(cls, json_dct):
-        try:
-            return cls(
-                json_dct['sender_id'],
-                json_dct['recipient_id'],
-                json_dct['amount'],
-                json_dct['type'],
-                json_dct['emission_time'],
-                json_dct['tx_id']
-            )
-        except KeyError:
-            return None
+    def from_dict_unsecure(cls, json_dct):
+        subcls = MetaTXContent.TxTypeToTypeMapping.get(json_dct['type'])
+        return (
+            subcls.from_dict_unsecure(json_dct) if subcls else
+            cls(json_dct['sender_id'], json_dct['recipient_id'],
+                json_dct['amount'], json_dct['type'],
+                json_dct['emission_time'], json_dct['tx_id'])
+        )
 
     def __str__(self):
         """Pretty print of a transaction content."""
@@ -86,7 +109,119 @@ class TransactionContent(object):
         return 0 if self.type != TYPE_TX else fees_rate * self.amount
 
 
-class TransactionStamp(object):
+class ContractSubmissionContent(TransactionContent):
+    """Stands for a transaction submitting a smart contract to the ledger."""
+
+    TX_TYPE = TYPE_SC_SUBMIT
+
+    def __init__(self, sender_id, recipient_id, amount, certificate,
+                 source_b64, tx_time=None, tx_id=None):
+        """Creates a new ContractSubmissionContent with provided parameters.
+
+        :param sender_id: The id of the node sending the transaction.
+        :type sender_id: str
+        :param recipient_id: The id of the node receiving the transaction.
+        :type recipient_id: str
+        :param amount: The amount of fees. Must be the result of a quotation.
+        :type amount: float
+        :param certificate: Certificate required to submit a contract.
+        :type certificate: str
+        :param source_b64: Source code for the contract, encoded in base 64.
+        :type source_b64: str
+        :param tx_time: Timestamp of the emission.
+        :type tx_time: float
+        :param tx_id: Id of the created transaction.
+        :type tx_id: str
+        """
+        super().__init__(sender_id, recipient_id, amount, self.TX_TYPE,
+                         tx_time, tx_id)
+        self.source_b64 = source_b64
+        self.certificate = certificate
+
+    @classmethod
+    def from_dict_unsecure(cls, json_dct):
+        return cls(json_dct['sender_id'], json_dct['recipient_id'],
+                   json_dct['amount'], json_dct['certificate'],
+                   json_dct['source_b64'], json_dct['emission_time'],
+                   json_dct['tx_id'])
+
+
+class ContractInvocationContent(TransactionContent):
+    """Stands for a transaction requesting execution of a smart contract."""
+
+    TX_TYPE = TYPE_SC_INVOKE
+
+    def __init__(self, sender_id, recipient_id, amount, sc_id, abi_call,
+                 tx_time=None, tx_id=None):
+        """Creates a new ContractInvocationContent with provided parameters.
+
+        :param sender_id: The id of the node sending the transaction.
+        :type sender_id: str
+        :param recipient_id: The id of the node receiving the transaction.
+        :type recipient_id: str
+        :param amount: The amount of fees. Must be the result of a quotation.
+        :type amount: float
+        :param sc_id: Id of invoked contract.
+        :type sc_id: str
+        :param abi_call: Encoded call using contract ABI.
+        :type abi_call: str
+        :param tx_time: Timestamp of the emission.
+        :type tx_time: float
+        :param tx_id: Id of the created transaction.
+        :type tx_id: str
+        """
+        super().__init__(sender_id, recipient_id, amount, self.TX_TYPE,
+                         tx_time, tx_id)
+        self.sc_id = sc_id
+        self.abi_call = abi_call
+
+    @classmethod
+    def from_dict_unsecure(cls, json_dct):
+        return cls(json_dct['sender_id'], json_dct['recipient_id'],
+                   json_dct['amount'], json_dct['sc_id'],
+                   json_dct['abi_call'], json_dct['emission_time'],
+                   json_dct['tx_id'])
+
+
+class ContractExecutionContent(TransactionContent):
+    """Stands for a transaction detailing execution of a smart contract."""
+
+    TX_TYPE = TYPE_SC_EXEC
+
+    def __init__(self, sender_id, sc_id, exec_info, tx_time=None, tx_id=None):
+        """Creates a new ContractExecutionContent with provided parameters.
+
+        :param sender_id: The id of the node sending the transaction.
+        :type sender_id: str
+        :param sc_id: Id of invoked contract.
+        :type sc_id: str
+        :param exec_info: The detail of the contract execution.
+        :type exec_info: ExecutionInfo
+        :param tx_time: Timestamp of the emission.
+        :type tx_time: float
+        :param tx_id: Id of the created transaction.
+        :type tx_id: str
+        """
+        super().__init__(sender_id, sender_id, 0, self.TX_TYPE, tx_time, tx_id)
+        self.sc_id = sc_id
+        self.exec_info = exec_info
+
+    def to_dict(self):
+        """ExecutionInfo has its serialization and must be done separately."""
+        exec_info_json = self.exec_info.to_dict()
+        return {
+            key: val if key != 'exec_info' else exec_info_json
+            for key, val in super().to_dict().items()
+        }
+
+    @classmethod
+    def from_dict_unsecure(cls, json_dct):
+        exec_info = ExecutionInfo.from_dict(json_dct['exec_info'])
+        return cls(json_dct['sender_id'], json_dct['sc_id'], exec_info,
+                   json_dct['emission_time'], json_dct['tx_id'])
+
+
+class TransactionStamp(JSONSerializable):
     """The seal appended by a master node to a transaction."""
 
     def __init__(self, tx_fees, master_id, processing_time=None):
@@ -105,28 +240,10 @@ class TransactionStamp(object):
         self.fees = tx_fees
         self.master_id = master_id
 
-    def to_json(self):
-        """Provides a JSON representation of this transaction stamp."""
-        return json.dumps(self.__dict__)
-
     @classmethod
-    def from_json(cls, json_stamp):
-        """Creates a new TransactionStamp from provided JSON string."""
-        try:
-            return cls.from_dict(json.loads(json_stamp))
-        except (TypeError, JSONDecodeError):
-            return None
-
-    @classmethod
-    def from_dict(cls, json_dct):
-        try:
-            return cls(
-                json_dct['fees'],
-                json_dct['master_id'],
-                json_dct['processing_time'],
-            )
-        except KeyError:
-            return None
+    def from_dict_unsecure(cls, json_dct):
+        return cls(json_dct['fees'], json_dct['master_id'],
+                   json_dct['processing_time'])
 
     def __str__(self):
         """Pretty print of a transaction stamp."""
@@ -137,7 +254,7 @@ class TransactionStamp(object):
         )
 
 
-class Transaction(object):
+class Transaction(JSONSerializable):
     """Stands for a transaction assets between two nodes."""
 
     def __init__(self, tx_content=None, signature=None, stamp=None):
@@ -185,12 +302,8 @@ class Transaction(object):
             dct.update(self.stamp.__dict__)
         return dct
 
-    def to_json(self):
-        """Provides a JSON representation of this transaction."""
-        return json.dumps(self.to_dict())
-
     @classmethod
-    def from_dict(cls, json_dct):
+    def from_dict_unsecure(cls, json_dct):
         """Creates a new Transaction from provided dict.
 
         :param json_dct: The dictionary covering the fields of this object.
@@ -204,19 +317,6 @@ class Transaction(object):
         content = TransactionContent.from_dict(json_dct)
         stamp = TransactionStamp.from_dict(json_dct)
         return cls(content, signature, stamp)
-
-    @classmethod
-    def from_json(cls, json_tx):
-        """Creates a new Transaction from provided JSON string.
-
-        :param json_tx: The dictionary covering the fields of this object.
-        :type json_tx: str
-        """
-        try:
-            json_dct = json.loads(json_tx)
-        except JSONDecodeError:
-            return None
-        return cls.from_dict(json_dct)
 
     def __str__(self):
         """Pretty print of a transaction."""

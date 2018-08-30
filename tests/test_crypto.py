@@ -34,3 +34,13 @@ class TestCrypto(unittest.TestCase):
             ['AAAAA', '88888', 'BBBBB', '77777']
         )
         self.assertEqual(closest, 'AAAAA')
+
+    def test_base64_encode_is_deterministic(self):
+        return crypto.base64_encode('test') == crypto.base64_encode('test')
+
+    def test_base64_decode_is_deterministic(self):
+        test = 'dGVzdA==\n'
+        return crypto.base64_decode(test) == crypto.base64_decode(test)
+
+    def test_base64_encode_then_decode_returns_original(self):
+        return crypto.base64_decode(crypto.base64_encode('test')) == 'test'

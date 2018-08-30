@@ -1,8 +1,20 @@
 import unittest
 
-from mock import patch
+from mock import patch, MagicMock
+from pikciosc.models import ExecutionInfo
 
 import pikciopou.transactions as transactions
+
+
+class TestMetaTXContent(unittest.TestCase):
+    """Tests the MetaTXContent metaclass"""
+
+    def test_invalid_class_declaration_raises_exception(self):
+        with self.assertRaises(AttributeError):
+            class DummyTXContent(metaclass=transactions.MetaTXContent):
+                pass
+
+            raise Exception(DummyTXContent.__name__ + 'should not pass test')
 
 
 class TestTransactionContent(unittest.TestCase):
@@ -35,32 +47,65 @@ class TestTransactionContent(unittest.TestCase):
             self.tx_content.type = tx_type
             self.assertEqual(self.tx_content.compute_fees(0.1), 0)
 
-    def test_to_json_returns_valid_json(self):
-        self.assertEqual(
-            self.tx_content.to_json(),
-            '{"tx_id": "hash", "type": "PKC", "sender_id": "sender", '
-            '"recipient_id": "recipient", "amount": 1234, "emission_time": 1}'
-        )
-
-    def test_from_json_returns_original(self):
-        content_2 = transactions.TransactionContent.from_json(
-            self.tx_content.to_json()
-        )
-        self.assertDictEqual(self.tx_content.__dict__, content_2.__dict__)
-
-    def test_from_json_returns_none_in_case_of_invalid_json(self):
-        self.assertIsNone(transactions.TransactionContent.from_json(""))
-        self.assertIsNone(transactions.TransactionContent.from_json("qdsfdh"))
-
-    def test_from_dict_returns_none_if_missing_attribute(self):
-        self.assertIsNone(transactions.TransactionContent.from_dict({
+    def test_from_dict_unsecure_returns_submission_content_if_case(self):
+        self.assertIsInstance(transactions.TransactionContent.from_dict({
+            'type': transactions.TYPE_SC_SUBMIT,
             'sender_id': '2',
             'recipient_id': '1',
             'amount': 1234,
-        }))
+            'certificate': 'certificate',
+            'source_b64': 1234,
+            'emission_time': 2536423,
+            'tx_id': '1234',
+        }), transactions.ContractSubmissionContent)
+
+    def test_from_dict_unsecure_returns_invocation_content_if_case(self):
+        self.assertIsInstance(transactions.TransactionContent.from_dict({
+            'type': transactions.TYPE_SC_INVOKE,
+            'sender_id': '2',
+            'recipient_id': '1',
+            'amount': 1234,
+            'sc_id': '133562',
+            'abi_call': 'rdhr564dyrgerdy',
+            'emission_time': 2536423,
+            'tx_id': '1234',
+        }), transactions.ContractInvocationContent)
+
+    def test_from_dict_unsecure_returns_execution_content_if_case(self):
+        self.assertIsInstance(transactions.TransactionContent.from_dict({
+            'type': transactions.TYPE_SC_EXEC,
+            'sender_id': '2',
+            'sc_id': '133562',
+            'exec_info': ExecutionInfo([]).to_dict(),
+            'emission_time': 2536423,
+            'tx_id': '1234',
+        }), transactions.ContractExecutionContent)
+
+    def test_from_dict_unsecure_returns_transaction_content_otherwise(self):
+        self.assertIsInstance(transactions.TransactionContent.from_dict({
+            'type': transactions.TYPE_TX,
+            'sender_id': '2',
+            'recipient_id': '1',
+            'amount': 1234,
+            'emission_time': 2536423,
+            'tx_id': '1234',
+        }), transactions.TransactionContent)
 
     def test_str_is_implemented(self):
         str(self.tx_content)
+
+
+class TestContractExecutionContent(unittest.TestCase):
+    """Tests the ContractExecutionContent class."""
+
+    def test_to_dict_serialises_exec_info_separately(self):
+        exec_info = MagicMock()
+        content = transactions.ContractExecutionContent('1', '2', exec_info)
+
+        dct_content = content.to_dict()
+
+        exec_info.to_dict.assert_called_once()
+        self.assertIs(dct_content['exec_info'], exec_info.to_dict())
 
 
 class TestTransactionStamp(unittest.TestCase):

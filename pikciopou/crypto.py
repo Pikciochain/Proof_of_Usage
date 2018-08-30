@@ -133,3 +133,25 @@ def get_closest_hash_to(hash_target, hashes):
     ]
     rankings = sorted(candidates, key=lambda candidate: candidate[1])
     return rankings[0][0]
+
+
+def base64_encode(payload):
+    """Encodes provided payload to base 64.
+
+    :param payload: The payload to encode.
+    :type payload: str
+    :return: The encoded payload.
+    :rtype: str
+    """
+    return base64.encodebytes(payload.encode()).decode('utf-8')
+
+
+def base64_decode(payload):
+    """Encodes provided payload from base 64.
+
+    :param payload: The payload to decode.
+    :type payload: str
+    :return: The decoded payload.
+    :rtype: str
+    """
+    return base64.decodebytes(payload.encode()).decode('utf-8')

@@ -8,6 +8,9 @@ Parameters precedence is defined as following:
 from argparse import ArgumentParser
 from os import environ, path
 
+from pikciosc.quotations import ENV_PKC_SC_SUBMIT_CHAR_COST, \
+    ENV_PKC_SC_EXEC_LINE_COST
+
 
 class Config(object):
     """Single entrypoint for getting parameters"""
@@ -16,6 +19,7 @@ class Config(object):
     _ENV_MASTERNODES_COUNT = 'POU_MASTERNODES_COUNT'
     _ENV_CASHINGNODES_COUNT = 'POU_CASHINGNODES_COUNT'
     _ENV_CONSUMERNODES_COUNT = 'POU_CONSUMERNODES_COUNT'
+    _ENV_TRUSTEDNODES_COUNT = 'POU_TRUSTEDNODES_COUNT'
     _ENV_BLOCK_TIME = 'POU_BLOCK_TIME'
     _ENV_FEES_RATE = 'POU_FEES_RATE'
     _ENV_RETRIBUTE_RATE = 'POU_RETRIBUTION_RATE'
@@ -35,6 +39,7 @@ class Config(object):
         self.masternodes_count = 0      # Number of master nodes
         self.cashingnodes_count = 0     # Number of cashing nodes
         self.consumernodes_count = 0    # Number of consumer nodes
+        self.trustednodes_count = 0     # Number of nodes giving certificates
         self.block_time = 0             # Cycle duration in seconds
         self.fees_rate = 0.             # % of amount to take as a fee.
         self.retribute_rate = 0.        # % of Tx fees earned by master nodes
@@ -51,6 +56,9 @@ class Config(object):
         )
         self.cashingnodes_folder = path.join(
             self.output_folder, 'cashingnodes'
+        )
+        self.trustednodes_folder = path.join(
+            self.output_folder, 'trustednodes'
         )
 
     def load(self):
@@ -85,6 +93,14 @@ class Config(object):
             type=int,
             help='Number of consumer nodes',
             default=environ.get(self._ENV_CONSUMERNODES_COUNT, 10)
+        )
+        parser.add_argument(
+            "-trc",
+            "--trustednodes-count",
+            dest="trustednodes_count",
+            type=int,
+            help='Number of trusted nodes',
+            default=environ.get(self._ENV_TRUSTEDNODES_COUNT, 1)
         )
         parser.add_argument(
             "-bt",
@@ -139,11 +155,16 @@ class Config(object):
         self.masternodes_count = args.masternodes_count
         self.cashingnodes_count = args.cashingnodes_count
         self.consumernodes_count = args.consumernodes_count
+        self.trustednodes_count = args.trustednodes_count
         self.block_time = args.blocktime
         self.fees_rate = args.fees_rate
         self.retribute_rate = args.retribution_rate
         self.total_assets = args.total_assets
         self.local_test = args.local_test
         self.remote_master = args.remote_master
+        if ENV_PKC_SC_SUBMIT_CHAR_COST not in environ:
+            environ[ENV_PKC_SC_SUBMIT_CHAR_COST] = '0.1'
+        if ENV_PKC_SC_EXEC_LINE_COST not in environ:
+            environ[ENV_PKC_SC_EXEC_LINE_COST] = '0.2'
 
         return self

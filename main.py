@@ -97,6 +97,16 @@ def make_random_transactions(ctx, consumers):
         time.sleep(3)
 
 
+def run_core_simulation(ctx, consumers):
+    """Runs common part of local and remote simulations."""
+    trusted_node_id = ctx.poll_trusted_node_id()
+    certificate = ctx.get_certificate(trusted_node_id, consumers[0].id)
+    logging.info("Obtained certificate {} from node {} for node {}".format(
+        certificate, trusted_node_id, consumers[0].id
+    ))
+    make_random_transactions(ctx, consumers)
+
+
 def start_local_simulation():
     """Runs a simulation to show how Pikcio Proof Of Usage works."""
 
@@ -108,6 +118,7 @@ def start_local_simulation():
         cfg.masternodes_folder,
         cfg.cashingnodes_folder,
         cfg.consumernodes_folder,
+        cfg.trustednodes_folder,
         cfg.block_time,
         cfg.fees_rate,
         cfg.retribute_rate
@@ -116,6 +127,8 @@ def start_local_simulation():
     ctx.clear()
 
     # Create the nodes locally.
+    for _ in range(cfg.trustednodes_count):
+        ctx.create_trustednode()
     for _ in range(cfg.masternodes_count):
         ctx.create_masternode()
     for _ in range(cfg.cashingnodes_count):
@@ -128,7 +141,7 @@ def start_local_simulation():
     dispatch_assets(ctx, consumers[0], consumers[1:])
 
     ctx.start()
-    make_random_transactions(ctx, consumers)
+    run_core_simulation(ctx, consumers)
     ctx.stop()
 
 
@@ -140,6 +153,7 @@ def start_remote_simulation_master(i):
         cfg.masternodes_folder,
         cfg.cashingnodes_folder,
         cfg.consumernodes_folder,
+        cfg.trustednodes_folder,
         cfg.block_time,
         cfg.fees_rate,
         cfg.retribute_rate,
@@ -160,6 +174,7 @@ def start_remote_simulation():
         cfg.masternodes_folder,
         cfg.cashingnodes_folder,
         cfg.consumernodes_folder,
+        cfg.trustednodes_folder,
         cfg.block_time,
         cfg.fees_rate,
         cfg.retribute_rate,
@@ -167,6 +182,8 @@ def start_remote_simulation():
     )
 
     # Create the nodes locally.
+    for _ in range(cfg.trustednodes_count):
+        ctx.create_trustednode()
     for _ in range(cfg.cashingnodes_count):
         ctx.create_cashingnode()
     consumers = [
@@ -186,7 +203,7 @@ def start_remote_simulation():
             ctx.register_remote_masternode(master_id)
 
     dispatch_assets(ctx, consumers[0], consumers[1:])
-    make_random_transactions(ctx, consumers)
+    run_core_simulation(ctx, consumers)
 
 
 if __name__ == '__main__':

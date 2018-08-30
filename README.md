@@ -1,6 +1,6 @@
 # Pikcio - Proof of Usage
 
-[![Build Status](https://travis-ci.org/Pikciochain/Proof_of_Usage.svg?branch=master)](https://travis-ci.org/Pikciochain/Proof_of_Usage)
+[![Build Status](https://travis-ci.com/Pikciochain/Proof_of_Usage.svg?token=9rPJ6zo5nsANbGUSdvQW&branch=master)](https://travis-ci.com/Pikciochain/Proof_of_Usage)
 [![Coverage Status](https://codecov.io/gh/Pikciochain/Proof_of_Usage/branch/master/graph/badge.svg)](https://codecov.io/gh/Pikciochain/Proof_of_Usage)
 
 This project demonstrates how **Pikcio** uses a **Proof of Usage** as a good
@@ -113,8 +113,10 @@ python main.py --help
 You should get something like:
 ```bash
 usage: main.py [-h] [-mac MASTERNODES_COUNT] [-cac CASHINGNODES_COUNT]
-               [-coc CONSUMERNODES_COUNT] [-bt BLOCKTIME] [-fr FEES_RATE]
-               [-rr RETRIBUTION_RATE]
+               [-coc CONSUMERNODES_COUNT] [-trc TRUSTEDNODES_COUNT]
+               [-bt BLOCKTIME] [-fr FEES_RATE] [-rr RETRIBUTION_RATE]
+               [-ta TOTAL_ASSETS] [-l] [-rm REMOTE_MASTER]
+
 
 blockchain: proof of usage
 
@@ -126,12 +128,20 @@ optional arguments:
                         Number of cashing nodes
   -coc CONSUMERNODES_COUNT, --consumernodes-count CONSUMERNODES_COUNT
                         Number of consumer nodes
+  -trc TRUSTEDNODES_COUNT, --trustednodes-count TRUSTEDNODES_COUNT
+                        Number of trusted nodes
   -bt BLOCKTIME, --blocktime BLOCKTIME
                         Cycle duration in seconds
   -fr FEES_RATE, --fees-rate FEES_RATE
                         Percentage of transaction amount taken as a fee
   -rr RETRIBUTION_RATE, --retribution-rate RETRIBUTION_RATE
                         Percentage of transaction fees earned by master nodes
+  -ta TOTAL_ASSETS, --total-assets TOTAL_ASSETS
+                        Initial amount of assets in the market
+  -l, --local           Requires a local test instead of a remote one
+  -rm REMOTE_MASTER, --remote-master REMOTE_MASTER
+                        Index of master to run a remote master node.
+
 ```
 
 All options have a default. Each of them can also be defined using environment
@@ -246,6 +256,11 @@ pytest
 ```
 
 All tests are kept under the `tests` folder at the root of the project.
+
+To collect the coverage, run following command at the root of the project:
+```bash
+pytest --cov-report term-missing --cov=pikciopou
+```
 
 ## Authors
 

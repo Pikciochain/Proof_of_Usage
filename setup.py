@@ -8,7 +8,7 @@ with open('requirements.txt', 'r') as fin:
 
 setup(
     name="proof-of-usage",
-    version='version='0.1.0'',
+    version="version='0.1.0'",
     description="Proof of Usage Consensus",
     author='Thibault Drevon',
     author_email="thibault@yellowstones.io",

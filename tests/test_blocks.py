@@ -256,20 +256,21 @@ class TestBlock(unittest.TestCase):
     def test_typed_transactions_based_getters(self):
         self.block._transactions_of_type = MagicMock()
 
-        _ = self.block.lucky_stakeholders
+        self.assertIsNotNone(self.block.lucky_stakeholders)
         self.block._transactions_of_type.assert_called_with(TYPE_CASHBACK)
 
-        _ = self.block.regular_transactions
+        self.assertIsNotNone(self.block.regular_transactions)
+
         self.block._transactions_of_type.assert_called_with(TYPE_TX)
 
-        _ = self.block.cashing_transactions
+        self.assertIsNotNone(self.block.cashing_transactions)
         self.block._transactions_of_type.assert_called_with(TYPE_CASHING)
 
-        _ = self.block.cashback_transactions
+        self.assertIsNotNone(self.block.cashback_transactions)
         self.block._transactions_of_type.assert_called_with(TYPE_CASHBACK)
 
-        _ = self.block.cashing_amount
+        self.assertIsNotNone(self.block.cashing_amount)
         self.block._transactions_of_type.assert_called_with(TYPE_CASHING)
 
-        _ = self.block.cashback_amount
+        self.assertIsNotNone(self.block.cashback_amount)
         self.block._transactions_of_type.assert_called_with(TYPE_CASHBACK)

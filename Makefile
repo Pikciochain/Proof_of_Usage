@@ -12,5 +12,4 @@ release:
 	python setup.py bdist_wheel upload -r local
 
 coverage:
-	coverage run --source athena setup.py test
-	coverage report -m
+	pytest --cov-report term-missing --cov=pikciopou

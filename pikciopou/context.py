@@ -2,19 +2,22 @@
 actual communication between nodes, might they be in the same process, in
 different processes or on remote machines.
 """
-import logging
 import os
 import shutil
+import logging
 import threading
 
-import requests
 import flask
+import requests
+
+from pikciosc.models import ContractInterface
+from pikciosc.quotations import Quotation
 
 from pikciopou import crypto
 from pikciopou.blocks import Block
 from pikciopou.keystore import KeyStore
 from pikciopou.nodes import MasterNode, ConsumerNode, CashingNode, RefNode, \
-    Node
+    TrustedNode, SCBundle
 from pikciopou.pou import ProofOfUsageAlgorithm
 from pikciopou.transactions import Transaction
 
@@ -25,7 +28,8 @@ class LocalContext(object):
     """
 
     def __init__(self, keystore_path, masternodes_folder, cashingnodes_folder,
-                 consumernodes_folder, block_time, fees_rate, retribute_rate):
+                 consumernodes_folder, trustednodes_folder, block_time,
+                 fees_rate, retribute_rate):
         """Initialises a new Context.
 
         :param: keystore_path: Path to the folder on this machine to store the
@@ -41,6 +45,9 @@ class LocalContext(object):
         :param consumernodes_folder: Folder path on this machine where created
             consumer nodes should save their data.
         :type consumernodes_folder: str
+        :param trustednodes_folder: Folder path on this machine where created
+            trusted nodes should save their data.
+        :type trustednodes_folder: str
         :param block_time: Seconds between each block creation.
         :type block_time: int
         :param fees_rate: Percentage of each transaction amount taken out as a
@@ -49,6 +56,7 @@ class LocalContext(object):
         :param retribute_rate: Percentage of each transaction fee that the
             master node closing a block can keep for itself.
         """
+        self.trustednodes_folder = trustednodes_folder
         self._keystore = KeyStore(keystore_path)
         self.masternodes_folder = masternodes_folder
         self.cashingnodes_folder = cashingnodes_folder
@@ -67,6 +75,7 @@ class LocalContext(object):
         self.masternodes = {}
         self.consumernodes = {}
         self.cashingnodes = {}
+        self.trustednodes = {}
 
     @property
     def masters_ids(self):
@@ -82,6 +91,11 @@ class LocalContext(object):
     def cashings_ids(self):
         """Returns an iterable of all the cashing nodes ids"""
         return self.cashingnodes.keys()
+
+    @property
+    def trusteds_ids(self):
+        """Returns an iterable of all the cashing nodes ids"""
+        return self.trustednodes.keys()
 
     def _block_timer_tick(self):
         """Triggered when it is time to close a block."""
@@ -110,6 +124,7 @@ class LocalContext(object):
             self.masternodes if isinstance(node, MasterNode) else
             self.cashingnodes if isinstance(node, CashingNode) else
             self.consumernodes if isinstance(node, ConsumerNode) else
+            self.trustednodes if isinstance(node, TrustedNode) else
             None
         )
         if dct is None:
@@ -130,12 +145,17 @@ class LocalContext(object):
     def clear(self):
         """Clean this context state and the folders on disk."""
         self._keystore.clear()
-        for dct in self.masternodes, self.consumernodes, self.cashingnodes:
+        node_registers = (
+            self.masternodes, self.consumernodes, self.cashingnodes,
+            self.trustednodes
+        )
+        for dct in node_registers:
             dct.clear()
         for folder in (
                 self.masternodes_folder,
                 self.consumernodes_folder,
-                self.cashingnodes_folder
+                self.cashingnodes_folder,
+                self.trustednodes_folder,
         ):
             if os.path.exists(folder):
                 shutil.rmtree(folder)
@@ -165,9 +185,18 @@ class LocalContext(object):
         :return: The cashing node.
         :rtype: CashingNode
         """
-        # No cashing type at the moment.
         logging.debug('Creating cashing {}'.format(len(self.cashingnodes)))
         return CashingNode(self, self.cashingnodes_folder)
+
+    def create_trustednode(self):
+        """Creates a trusted node and returns it.
+
+        :return: The trusted node.
+        :rtype: TrustedNode
+        """
+        # No cashing type at the moment.
+        logging.debug('Creating trusted {}'.format(len(self.trustednodes)))
+        return TrustedNode(self, self.trustednodes_folder)
 
     def poll_cashing_node_id(self):
         """Finds the next cashing node to redistribute fees to.
@@ -175,7 +204,27 @@ class LocalContext(object):
         :return: The id of the cashing node to use.
         :rtype: str
         """
+        # TODO: Introduce some random
         return next(iter(self.cashings_ids))
+
+    def poll_trusted_node_id(self):
+        """Finds the next trusted node to ask a certificate to.
+
+        :return: The id of the trusted node to use.
+        :rtype: str
+        """
+        # TODO: Introduce some random
+        return next(iter(self.trusteds_ids))
+
+    def poll_master_node_id(self, hash_id):
+        """Finds the next master node to contact for a request.
+
+        :param hash_id: Id of a related item, to help in the decision process.
+        :type hash_id: str
+        :return: The id of the master node to use.
+        :rtype: str
+        """
+        return crypto.get_closest_hash_to(hash_id, list(self.masters_ids))
 
     def get_public_key(self, node_id):
         """Returns the public key of the provided node, if that node is
@@ -210,10 +259,15 @@ class LocalContext(object):
         :param transaction: Transaction to forward. It must have content and
             sender's signature.
         :type transaction: Transaction
+        :return: A list of the non empty responses from the masternodes.
+        :rtype: list[str]
         """
-        for node_id in self.masters_ids:
-            if node_id != sender_id:
-                self.send_transaction_to_master(node_id, transaction)
+        results = [
+            self.send_transaction_to_master(node_id, transaction)
+            for node_id in self.masters_ids
+            if node_id != sender_id
+        ]
+        return list(filter(None, results))
 
     def get_lucky_signature(self, recipient_id, block):
         """Asks for a lucky stakeholder to sign header of provided block, if he
@@ -239,10 +293,13 @@ class LocalContext(object):
         :type block: Block
         :param master_id: The id of the node to send the block to.
         :type master_id: str
+        :return: True if the node was found and the block was sent.
+        :rtype: bool
         """
         masternode = self.masternodes.get(master_id)
         if masternode:
             masternode.receive_block(block)
+        return masternode is not None
 
     def send_transaction_to_master(self, master_id, transaction):
         """Forwards the transaction in parameter to the specified masternode so
@@ -253,10 +310,126 @@ class LocalContext(object):
         :type transaction: Transaction
         :param master_id: The id of the node to send the transaction to.
         :type master_id: str
+        :return: Any string result possibly returned by the masternode.
+        :rtype: str
         """
         masternode = self.masternodes.get(master_id)
         if masternode:
-            masternode.receive_transaction(transaction)
+            return masternode.receive_transaction(transaction)
+        return None
+
+    def get_certificate(self, trusted_id, sender_id):
+        """Request a certificate for the sender from specified trusted node.
+
+        :param trusted_id: Id of trusted node to request certificate from.
+        :type trusted_id: str
+        :param sender_id: Id of sender requesting the certificate.
+        :type sender_id: str
+        :return: The certificate or None if the node was unreachable or failed
+            to deliver the certificate.
+        """
+        trustednode = self.trustednodes.get(trusted_id)
+        return (
+            trustednode.deliver_certificate_for(sender_id) if trustednode
+            else None
+        )
+
+    def get_sc_submit_quotation_from_master(self, sc_bundle, master_id):
+        """Request a quotation from a masternode for executing the provided
+        bundled smart contract.
+
+        :param sc_bundle: The smart contract to request a quotation for
+        :type sc_bundle: SCBundle
+        :param master_id: Id of the master to contact.
+        :type master_id: str
+        :return: The quotation or None if an error occured.
+        :rtype: Quotation
+        """
+        masternode = self.masternodes.get(master_id)
+        return (
+            masternode.get_sc_submit_quotation(sc_bundle) if masternode
+            else None
+        )
+
+    def get_sc_submit_quotation(self, sc_bundle):
+        """Request a quotation from any masternode for submitting
+        the provided bundled smart contract.
+
+        :param sc_bundle: The smart contract to request a quotation for
+        :type sc_bundle: SCBundle
+        :return: The quotation or None if an error occured.
+        :rtype: Quotation
+        """
+        return self.get_sc_submit_quotation_from_master(
+            sc_bundle,
+            self.poll_master_node_id(sc_bundle.id)
+        )
+
+    def get_sc_invoke_quotation_from_master(self, sc_id, invoker_id,
+                                            master_id, endpoint_name):
+        """Request a quotation from a masternode for executing the provided
+        smart contract.
+
+        :param sc_id: Id of contract to execute.
+        :type sc_id: str
+        :param invoker_id: Id of Node requesting invocation.
+        :type invoker_id: str
+        :param master_id: Id of the master to contact.
+        :type master_id: str
+        :param endpoint_name: Name of executed endpoint.
+        :type endpoint_name: str
+        :return: The quotation or None if an error occured.
+        :rtype: Quotation
+        """
+        masternode = self.masternodes.get(master_id)
+        return (
+            None if not masternode else
+            masternode.get_sc_invoke_quotation(sc_id, invoker_id,
+                                               endpoint_name)
+        )
+
+    def get_sc_invoke_quotation(self, sc_id, invoker_id, endpoint_name):
+        """Request a quotation from any masternode for executing the provided
+        bundled smart contract.
+
+        :param sc_id: Id of contract to execute.
+        :type sc_id: str
+        :param invoker_id: Id of Node requesting invocation.
+        :type invoker_id: str
+        :param endpoint_name: Name of executed endpoint.
+        :type endpoint_name: str
+        :return: The quotation or None if an error occured.
+        :rtype: Quotation
+        """
+        return self.get_sc_invoke_quotation_from_master(
+            sc_id, invoker_id, self.poll_master_node_id(sc_id), endpoint_name
+        )
+
+    def get_sc_abi_from_master(self, sc_id, master_id):
+        """Request a quotation from a masternode for the provided bundled smart
+        contract.
+
+        :param sc_id: Id of smart contract to request the ABI for.
+        :type sc_id: str
+        :param master_id: Id of the master to contact.
+        :type master_id: str
+        :return: The contract interface, if any.
+        :rtype: ContractInterface
+        """
+        masternode = self.masternodes.get(master_id)
+        return masternode.get_abi(sc_id) if masternode else None
+
+    def get_sc_abi(self, sc_id):
+        """Requests ABI for provided smart contract id.
+
+        :param sc_id: Id of the contract to retrieve interface for.
+        :type sc_id: str
+        :return: The contract interface, if any.
+        :rtype: ContractInterface
+        """
+        return self.get_sc_abi_from_master(
+            sc_id, self.poll_master_node_id(sc_id)
+        )
 
     def start(self):
         """Starts the context. Depends on the context implementation."""
@@ -320,6 +493,30 @@ class RemoteContext(LocalContext):
                 block = Block.from_json(flask.request.json)
                 return context.get_lucky_signature(node_id, block)
 
+            @app.route('/trusted/<node_id>/certify/<other_id>')
+            def _certify_node(node_id, other_id):
+                return context.get_certificate(node_id, other_id)
+
+            @app.route('/masters/<node_id>/sc/quotation')
+            def _get_sc_submit_quote(node_id):
+                bundle = SCBundle.from_json(flask.request.json)
+                return context\
+                    .get_sc_submit_quotation_from_master(bundle, node_id)\
+                    .to_json()
+
+            @app.route('/masters/<node_id>/sc/<sc_id>/abi')
+            def _get_sc_abi(node_id, sc_id):
+                return context\
+                    .get_sc_abi_from_master(sc_id, node_id)\
+                    .to_json()
+
+            @app.route('/masters/<node_id>/sc/<sc_id>'
+                       '/<endpoint>/quotation/<invoker_id>')
+            def _get_sc_invoke_quote(node_id, sc_id, endpoint, invoker_id):
+                return context.get_sc_invoke_quotation_from_master(
+                    sc_id, invoker_id, node_id, endpoint
+                ).to_json()
+
             @app.route('/describe', methods=['GET'])
             def _describe():
                 return flask.jsonify({
@@ -334,12 +531,16 @@ class RemoteContext(LocalContext):
                     'cashings': [
                         node.id for node in context.cashingnodes.values()
                         if isinstance(node, CashingNode)
+                    ],
+                    'trusteds': [
+                        node.id for node in context.trustednodes.values()
+                        if isinstance(node, TrustedNode)
                     ]
                 })
 
     def __init__(self, keystore_path, masternodes_folder, cashingnodes_folder,
-                 consumernodes_folder, block_time, fees_rate, retribute_rate,
-                 port):
+                 consumernodes_folder, trustednodes_folder, block_time,
+                 fees_rate, retribute_rate, port):
         """Creates a new Remote context listening ont his host and given port.
 
         :param: keystore_path: Path to the folder on this machine to store the
@@ -354,6 +555,9 @@ class RemoteContext(LocalContext):
         :param consumernodes_folder: Folder path on this machine where created
             consumer nodes should save their data.
         :type consumernodes_folder: str
+        :param trustednodes_folder: Folder path on this machine where created
+            trusted nodes should save their data.
+        :type trustednodes_folder: str
         :param block_time: Seconds between each block creation.
         :type block_time: int
         :param fees_rate: Percentage of each transaction amount taken out as a
@@ -366,7 +570,8 @@ class RemoteContext(LocalContext):
         """
         super().__init__(keystore_path, masternodes_folder,
                          cashingnodes_folder, consumernodes_folder,
-                         block_time, fees_rate, retribute_rate)
+                         trustednodes_folder, block_time, fees_rate,
+                         retribute_rate)
         self._server = self.RemoteContextServer(self, port)
 
     @staticmethod
@@ -409,7 +614,7 @@ class RemoteContext(LocalContext):
         host_filepath = os.path.join(node_root_folder, node_id, 'host')
         return 'http://{}:{}/'.format(*self._get_host_info(host_filepath))
 
-    def get_master_base_endpoint(self, node_id):
+    def master_url(self, node_id):
         """Builds the url to reach out to a masternode's remote context.
 
         :param node_id: Id of the master node to reach.
@@ -420,7 +625,7 @@ class RemoteContext(LocalContext):
         base = self._get_node_host_base_url(self.masternodes_folder, node_id)
         return base + 'masters/{}'.format(node_id)
 
-    def get_consumer_base_endpoint(self, node_id):
+    def consumer_url(self, node_id):
         """Builds the url to reach out to a consumer's remote context.
 
         :param node_id: Id of the consumer node to reach.
@@ -430,6 +635,17 @@ class RemoteContext(LocalContext):
         """
         base = self._get_node_host_base_url(self.consumernodes_folder, node_id)
         return base + 'consumers/{}'.format(node_id)
+
+    def trusted_url(self, node_id):
+        """Builds the url to reach out to a trusted node's remote context.
+
+        :param node_id: Id of the trusted node to reach.
+        :type node_id: str
+        :return: The base url, which must be completed to build the endpoint.
+        :rtype: str
+        """
+        base = self._get_node_host_base_url(self.trustednodes_folder, node_id)
+        return base + 'trusted/{}'.format(node_id)
 
     def register_remote_masternode(self, node_id):
         """Registers a remote masternode exists on distant host.
@@ -458,18 +674,23 @@ class RemoteContext(LocalContext):
 
     @property
     def masters_ids(self):
-        """Masters ids are all under the master folder."""
+        """Returns an iterable of all the masters ids"""
         return os.listdir(self.masternodes_folder)
 
     @property
     def consumers_ids(self):
-        """Consumer ids are all under the master folder."""
+        """Returns an iterable of all the consumers ids"""
         return os.listdir(self.consumernodes_folder)
 
     @property
     def cashings_ids(self):
-        """Cashing ids are all under the master folder."""
+        """Returns an iterable of all the cashing nodes ids"""
         return os.listdir(self.cashingnodes_folder)
+
+    @property
+    def trusteds_ids(self):
+        """Returns an iterable of all the cashing nodes ids"""
+        return os.listdir(self.trustednodes_folder)
 
     def create_masternode(self):
         """Overrides the default behavior to also save the node's address."""
@@ -486,6 +707,12 @@ class RemoteContext(LocalContext):
     def create_consumernode(self):
         """Overrides the default behavior to also save the node's address."""
         node = super().create_consumernode()
+        self._save_host_info(node, self._server.ip_address, self._server.port)
+        return node
+
+    def create_trustednode(self):
+        """Overrides the default behavior to also save the node's address."""
+        node = super().create_trustednode()
         self._save_host_info(node, self._server.ip_address, self._server.port)
         return node
 
@@ -520,12 +747,13 @@ class RemoteContext(LocalContext):
         :param master_id: The id of node to send the block to.
         :type master_id: str
         """
-        node = self.masternodes.get(master_id)
-        if isinstance(node, Node):
-            super().send_block_to_master(master_id, block)
-        else:
-            url = self.get_master_base_endpoint(master_id) + '/blocks'
-            requests.post(url, json=block.to_json())
+        return (
+                super().send_block_to_master(master_id, block) or
+                requests.post(
+                    self.master_url(master_id) + '/blocks',
+                    json=block.to_json()
+                ) is not None
+        )
 
     def send_transaction_to_master(self, master_id, transaction):
         """Sends a request to a remote node for it to push given transaction.
@@ -535,12 +763,13 @@ class RemoteContext(LocalContext):
         :param master_id: The id of node to send the transaction to.
         :type master_id: str
         """
-        node = self.masternodes.get(master_id)
-        if isinstance(node, Node):
-            super().send_transaction_to_master(master_id, transaction)
-        else:
-            url = self.get_master_base_endpoint(master_id) + '/transactions'
-            requests.post(url, json=transaction.to_json())
+        return (
+                super().send_transaction_to_master(master_id, transaction) or
+                requests.post(
+                    self.master_url(master_id) + '/transactions',
+                    json=transaction.to_json()
+                ).text
+        )
 
     def get_lucky_signature(self, recipient_id, block):
         """Sends a request to a remote node to ask for its block signature.
@@ -552,9 +781,90 @@ class RemoteContext(LocalContext):
         :return: The signature
         :rtype str
         """
-        node = self.consumernodes.get(recipient_id)
-        if isinstance(node, Node):
-            return super().get_lucky_signature(recipient_id, block)
-        else:
-            url = self.get_consumer_base_endpoint(recipient_id) + '/sign_block'
-            return requests.post(url, json=block.to_json()).text
+        return (
+                super().get_lucky_signature(recipient_id, block) or
+                requests.post(
+                    self.consumer_url(recipient_id) + '/sign_block',
+                    json=block.to_json()
+                ).text
+        )
+
+    def get_certificate(self, trusted_id, sender_id):
+        """Request a certificate for the sender from specified trusted node.
+
+        :param trusted_id: Id of trusted node to request certificate from.
+        :type trusted_id: str
+        :param sender_id: Id of sender requesting the certificate.
+        :type sender_id: str
+        :return: The certificate or None if the node was unreachable or failed
+            to deliver the certificate.
+        """
+        return (
+                super().get_certificate(trusted_id, sender_id) or
+                requests.get(
+                    self.trusted_url(trusted_id) + '/certify/' + sender_id
+                ).text
+        )
+
+    def get_sc_submit_quotation_from_master(self, bundle, master_id):
+        """Request a quotation from a masternode for the provided bundled smart
+        contract.
+
+        :param bundle: The smart contract to request a quotation
+            for
+        :type bundle: SCBundle
+        :param master_id: Id of the master to contact.
+        :type master_id: str
+        :return: The quotation or None if an error occured.
+        :rtype: Quotation
+        """
+        return (
+            super().get_sc_submit_quotation_from_master(bundle, master_id) or
+            Quotation.from_dict(requests.post(
+                self.master_url(master_id) + '/sc/quotation',
+                json=bundle.to_json()
+            ).json())
+        )
+
+    def get_sc_invoke_quotation_from_master(self, sc_id, invoker_id,
+                                            master_id, endpoint_name):
+        """Request a quotation from a masternode for executing the provided
+        smart contract.
+
+        :param sc_id: Id of contract to execute.
+        :type sc_id: str
+        :param invoker_id: Id of Node requesting invocation.
+        :type invoker_id: str
+        :param master_id: Id of the master to contact.
+        :type master_id: str
+        :param endpoint_name: Name of executed endpoint.
+        :type endpoint_name: str
+        :return: The quotation or None if an error occured.
+        :rtype: Quotation
+        """
+        return (
+            super().get_sc_invoke_quotation_from_master(
+                sc_id, invoker_id, master_id, endpoint_name
+            ) or Quotation.from_dict(requests.get(
+                self.master_url(master_id) +
+                '/sc/{}/quotation/{}'.format(sc_id, invoker_id),
+            ).json())
+        )
+
+    def get_sc_abi_from_master(self, sc_id, master_id):
+        """Request a quotation from a masternode for the provided bundled smart
+        contract.
+
+        :param sc_id: Id of smart contract to request the ABI for.
+        :type sc_id: str
+        :param master_id: Id of the master to contact.
+        :type master_id: str
+        :return: The contract interface, if any.
+        :rtype: ContractInterface
+        """
+        return (
+                super().get_sc_abi_from_master(sc_id, master_id) or
+                ContractInterface.from_dict(requests.get(
+                    self.master_url(master_id) + '/sc/{}/abi'.format(sc_id)
+                ).json())
+        )

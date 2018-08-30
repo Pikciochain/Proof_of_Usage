@@ -5,13 +5,14 @@ import os
 from mock import MagicMock, patch, call, ANY
 
 import pikciopou.context as context
-from pikciopou.nodes import MasterNode, ConsumerNode, CashingNode, RefNode
+from pikciopou.nodes import MasterNode, ConsumerNode, CashingNode, TrustedNode
 
 CURRENT_DIRECTORY = os.path.dirname(__file__)
 TEST_INTERMEDIATE_FOLDER = os.path.join(CURRENT_DIRECTORY, 'test')
 TEST_CASHING_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'cashings')
 TEST_MASTER_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'masters')
 TEST_CONSUMERS_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'consumers')
+TEST_TRUSTED_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'trusted')
 
 
 class TestLocalContext(unittest.TestCase):
@@ -33,7 +34,7 @@ class TestLocalContext(unittest.TestCase):
 
         self.ctx = context.LocalContext(
             'keystore/', TEST_MASTER_FOLDER, TEST_CASHING_FOLDER,
-            TEST_CONSUMERS_FOLDER, 10, 0.1, 0.1
+            TEST_CONSUMERS_FOLDER, TEST_TRUSTED_FOLDER, 10, 0.1, 0.1
         )
         self.ctx._keystore = MagicMock()
 
@@ -54,6 +55,9 @@ class TestLocalContext(unittest.TestCase):
 
     def test_cashings_ids_returns_cashings_keys(self):
         self.assertEqual(self.ctx.cashings_ids, self.ctx.cashingnodes.keys())
+
+    def test_trusteds_ids_returns_trsuteds_keys(self):
+        self.assertEqual(self.ctx.trusteds_ids, self.ctx.trustednodes.keys())
 
     def test_block_timer_tick_does_not_reset_timer_if_keyboard_interrupt(self):
         self.ctx.fire_close_block = MagicMock(side_effect=KeyboardInterrupt)
@@ -117,8 +121,9 @@ class TestLocalContext(unittest.TestCase):
         self.assertFalse(self.ctx.masternodes)
         self.assertFalse(self.ctx.consumernodes)
         self.assertFalse(self.ctx.cashingnodes)
-        self.assertEquals(shutil_mock.rmtree.call_count, 3)
-        self.assertEquals(os_mock.makedirs.call_count, 3)
+        self.assertFalse(self.ctx.trustednodes)
+        self.assertEquals(shutil_mock.rmtree.call_count, 4)
+        self.assertEquals(os_mock.makedirs.call_count, 4)
 
     def test_create_masternode_returns_a_masternode(self,):
         node = self.ctx.create_masternode()
@@ -131,10 +136,23 @@ class TestLocalContext(unittest.TestCase):
     def test_create_cashingnode_returns_a_cashingnode(self):
         self.assertIsInstance(self.ctx.create_cashingnode(), CashingNode)
 
+    def test_create_trustednode_returns_a_trustednode(self):
+        self.assertIsInstance(self.ctx.create_trustednode(), TrustedNode)
+
     def test_poll_cashing_node_id_returns_first_cashing_node_id(self):
         self.ctx.cashingnodes = {'1': MagicMock(), '2': MagicMock()}
 
         self.assertEqual(self.ctx.poll_cashing_node_id(), '1')
+
+    def test_poll_trusted_node_id_returns_first_trusted_node_id(self):
+        self.ctx.trustednodes = {'1': MagicMock(), '2': MagicMock()}
+
+        self.assertEqual(self.ctx.poll_trusted_node_id(), '1')
+
+    def test_poll_master_node_id_returns_first_master_node_id(self):
+        self.ctx.masternodes = {'1': MagicMock(), '2': MagicMock()}
+
+        self.assertEqual(self.ctx.poll_master_node_id('1'), '1')
 
     def test_get_public_key_calls_keystore(self):
         self.ctx.get_public_key('1')

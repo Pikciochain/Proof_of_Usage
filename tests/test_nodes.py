@@ -4,6 +4,8 @@ import shutil
 from mock import patch, MagicMock, call
 import unittest
 
+from pikciosc.models import ExecutionInfo
+
 import pikciopou.nodes as nodes
 from pikciopou.blocks import BlockStamp
 from pikciopou.pou import POUCashback
@@ -13,76 +15,31 @@ from pikciopou.transactions import TransactionContent, TYPE_GENESIS, \
 
 CURRENT_DIRECTORY = os.path.dirname(__file__)
 TEST_INTERMEDIATE_FOLDER = os.path.join(CURRENT_DIRECTORY, 'test')
-TEST_CHAIN_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'chain')
 TEST_MASTER_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'master')
 TEST_CASHING_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'cashing')
 TEST_CONSUMER_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'consumer')
+TEST_TRUSTED_FOLDER = os.path.join(TEST_INTERMEDIATE_FOLDER, 'trusted')
 
 
-class TestChain(unittest.TestCase):
-    """Tests the Chain class."""
+class TestSCBundle(unittest.TestCase):
+    """Tests the SCBundle class."""
 
     def setUp(self):
-        self.chain = nodes.Chain(
-            TEST_CHAIN_FOLDER,
-            lambda json_object: json_object,
-            lambda obj: str(obj)
+        self.crypto_mock = patch('pikciopou.nodes.crypto').start()
+        self.scbundle = nodes.SCBundle('source_b64', 'signature', 'emitter_id')
+        self.addCleanup(patch.stopall)
+
+    def test_verify_calls_crypto_verify(self):
+        self.scbundle.verify(lambda emitter_id: 'key')
+
+        self.crypto_mock.verify.assert_called_once_with('source_b64',
+                                                        'signature', 'key')
+
+    def test_from_dict_unsecure_rebuilts_bundle(self):
+        self.assertEqual(
+            self.scbundle,
+            nodes.SCBundle.from_dict_unsecure(self.scbundle.to_dict())
         )
-
-    def tearDown(self):
-        if os.path.exists(TEST_INTERMEDIATE_FOLDER):
-            shutil.rmtree(TEST_INTERMEDIATE_FOLDER)
-
-    def test_check_folder_creates_folder_correctly(self):
-        self.chain._check_folder()
-        self.assertTrue(os.path.exists(TEST_CHAIN_FOLDER))
-
-    def test_get_path_returns_correct_object_name(self):
-        self.assertEquals(
-            self.chain._get_path(2),
-            os.path.join(TEST_CHAIN_FOLDER, '2.json')
-        )
-
-    def test_clear_removes_objects(self):
-        self.chain.push('obj')
-        self.chain.clear()
-        self.assertFalse(os.path.exists(TEST_CHAIN_FOLDER))
-
-    def test_push_creates_file(self):
-        self.chain.push('obj')
-
-        obj_file = os.path.join(TEST_CHAIN_FOLDER, '0.json')
-        self.assertTrue(os.path.exists(obj_file))
-        with open(obj_file) as key:
-            self.assertEquals(key.read(), 'obj')
-
-    def test_push_all_creates_files(self):
-        self.chain.push_all(('obj1', 'obj2'))
-
-        obj_file1 = os.path.join(TEST_CHAIN_FOLDER, '0.json')
-        obj_file2 = os.path.join(TEST_CHAIN_FOLDER, '1.json')
-        self.assertTrue(os.path.exists(obj_file1))
-        self.assertTrue(os.path.exists(obj_file2))
-
-    def test_get_returns_obj(self):
-        self.chain.push('obj_test')
-        self.assertEqual(self.chain.get(0), 'obj_test')
-
-    def test_get_invalid_index_raises_exception(self):
-        with self.assertRaises(IndexError):
-            self.chain.get(3)
-
-    def test_len_returns_number_of_objects(self):
-        self.chain.push_all(('obj1', 'obj2', 'obj3'))
-        self.assertEqual(len(self.chain), 3)
-
-    def test_iterator_returns_object_in_chain_order(self):
-        self.chain.push_all(('1', '3', '2'))
-        self.assertListEqual([obj for obj in self.chain], ['1', '3', '2'])
-
-    def test_reversed_returns_object_in_reversed_chain_order(self):
-        self.chain.push_all(('1', '3', '2'))
-        self.assertListEqual(list(reversed(self.chain)), ['2', '3', '1'])
 
 
 class TestNode(unittest.TestCase):
@@ -116,6 +73,38 @@ class TestNode(unittest.TestCase):
         context_mock.get_public_key.assert_called_once_with("node_id")
         self.assertEqual(key, context_mock.get_public_key.return_value)
 
+    def test_sign_calls_crypto_sign_correctly(self):
+        node = nodes.Node(MagicMock(), TEST_MASTER_FOLDER)
+        node.sign('payload')
+
+        self.crypto_mock.sign.assert_called_once_with(
+            'payload', node.private_key, node.id
+        )
+
+
+class TestTrustedNode(unittest.TestCase):
+    """Tests the TrustedNode class."""
+
+    def setUp(self):
+        self.crypto_patch = patch('pikciopou.nodes.crypto')
+        self.crypto_mock = self.crypto_patch.start()
+        self.crypto_mock.get_hash.return_value = '1'
+
+        self.node = nodes.TrustedNode(MagicMock(), TEST_TRUSTED_FOLDER)
+
+    def tearDown(self):
+        self.crypto_patch.stop()
+        if os.path.exists(TEST_INTERMEDIATE_FOLDER):
+            shutil.rmtree(TEST_INTERMEDIATE_FOLDER)
+
+    def test_deliver_certificate_for_calls_sign_appropriately(self):
+        self.node.sign = MagicMock()
+
+        result = self.node.deliver_certificate_for('3')
+
+        self.node.sign.assert_called_once_with('3')
+        self.assertEquals(result, self.node.sign.return_value)
+
 
 class TestConsumerNode(unittest.TestCase):
     """Tests the ConsumerNode class."""
@@ -132,48 +121,95 @@ class TestConsumerNode(unittest.TestCase):
         if os.path.exists(TEST_INTERMEDIATE_FOLDER):
             shutil.rmtree(TEST_INTERMEDIATE_FOLDER)
 
-    def test_sign_calls_crypto_sign_correctly(self):
-        self.node._sign('payload')
-
-        self.crypto_mock.sign.assert_called_once_with(
-            'payload', self.node.private_key, self.node.id
-        )
-
     def test_sign_transaction_calls_sign_correctly(self):
-        self.node._sign = MagicMock()
+        self.node.sign = MagicMock()
 
         tx_content_mock = MagicMock()
         self.node.sign_transaction(tx_content_mock)
 
-        self.node._sign.assert_called_once_with(tx_content_mock.to_json())
+        self.node.sign.assert_called_once_with(tx_content_mock.to_json())
 
     def test_sign_block_calls_sign_correctly(self):
-        self.node._sign = MagicMock()
+        self.node.sign = MagicMock()
 
         block_header_mock = MagicMock()
         self.node.sign_block(block_header_mock)
 
-        self.node._sign.assert_called_once_with(block_header_mock.to_json())
+        self.node.sign.assert_called_once_with(block_header_mock.to_json())
+
+    def test_create_sc_bundle_encode_source_and_signs_it(self):
+        self.node.sign = MagicMock()
+
+        result = self.node.create_sc_bundle('source_code')
+
+        encode_mock = self.crypto_mock.base64_encode
+        encode_mock.assert_called_once_with('source_code')
+        self.node.sign.assert_called_once_with(encode_mock())
+        self.assertEqual(result, nodes.SCBundle(
+            encode_mock(), self.node.sign(), self.node.id
+        ))
+
+    @patch('pikciopou.nodes.Transaction')
+    def test_package_transaction_content_signs_content(self, tx_mock):
+        self.node.sign_transaction = MagicMock()
+        tx_content_mock = MagicMock()
+
+        tx = self.node._package_transaction_content(tx_content_mock)
+
+        self.node.sign_transaction.assert_called_once_with(tx_content_mock)
+        tx_mock.assert_called_once_with(tx_content_mock,
+                                        self.node.sign_transaction())
+        self.assertEqual(tx, tx_mock())
 
     @patch('pikciopou.nodes.TransactionContent')
-    @patch('pikciopou.nodes.Transaction')
-    def test_create_transaction_creates_correct_signed_transaction(
-            self, tx_mock, tx_content_mock
-    ):
-        self.node.sign_transaction = MagicMock()
+    def test_create_transaction_packages_content(self, tx_content_mock):
+        package_mock = self.node._package_transaction_content = MagicMock()
 
         tx = self.node.create_transaction("recipient", 100, TYPE_GENESIS)
 
         tx_content_mock.assert_called_once_with(
-            sender_id=self.node.id,
-            recipient_id="recipient",
-            amount=100,
-            tx_type=TYPE_GENESIS
+            sender_id=self.node.id, recipient_id="recipient",
+            amount=100, tx_type=TYPE_GENESIS
         )
-        self.node.sign_transaction.assert_called_once_with(
-            tx_content_mock.return_value
+        package_mock.assert_called_once_with(tx_content_mock())
+        self.assertEqual(tx, package_mock())
+
+    @patch('pikciopou.nodes.ContractSubmissionContent')
+    def test_create_sc_submit_transaction_packages_content(
+            self, tx_content_mock
+    ):
+        poll_mock = self.node.context.poll_master_node_id = MagicMock()
+        package_mock = self.node._package_transaction_content = MagicMock()
+
+        tx = self.node.create_sc_submit_transaction(100, 'certificate',
+                                                    'source_b64')
+
+        tx_content_mock.assert_called_once_with(
+            sender_id=self.node.id, recipient_id="",
+            amount=100, certificate='certificate', source_b64='source_b64'
         )
-        self.assertEqual(tx, tx_mock.return_value)
+        poll_mock.assert_called_once_with(tx_content_mock().tx_id)
+        self.assertEqual(tx_content_mock().recipient_id, poll_mock())
+        package_mock.assert_called_once_with(tx_content_mock())
+        self.assertEqual(tx, package_mock())
+
+    @patch('pikciopou.nodes.ContractInvocationContent')
+    def test_create_sc_invoke_transaction_packages_content(
+            self, tx_content_mock
+    ):
+        poll_mock = self.node.context.poll_master_node_id = MagicMock()
+        package_mock = self.node._package_transaction_content = MagicMock()
+
+        tx = self.node.create_sc_invoke_transaction(100, 'sc_id', 'abi_call')
+
+        tx_content_mock.assert_called_once_with(
+            sender_id=self.node.id, recipient_id="",
+            amount=100, sc_id='sc_id', abi_call='abi_call'
+        )
+        poll_mock.assert_called_once_with(tx_content_mock().tx_id)
+        self.assertEqual(tx_content_mock().recipient_id, poll_mock())
+        package_mock.assert_called_once_with(tx_content_mock())
+        self.assertEqual(tx, package_mock())
 
 
 class TestMasterNode(unittest.TestCase):
@@ -183,6 +219,7 @@ class TestMasterNode(unittest.TestCase):
         self.crypto_patch = patch('pikciopou.nodes.crypto')
         self.crypto_mock = self.crypto_patch.start()
         self.crypto_mock.get_hash.return_value = '1'
+        self.crypto_mock.sign.return_value = 'signature'
 
         self.logging_patch = patch('pikciopou.nodes.logging')
         self.logging_mock = self.logging_patch.start()
@@ -193,8 +230,9 @@ class TestMasterNode(unittest.TestCase):
         self.os_makedirs_patch = patch('pikciopou.nodes.os.makedirs')
         self.os_makedirs_patch.start()
 
+        self.context_mock = MagicMock()
         self.node = nodes.MasterNode(
-            MagicMock(), TEST_MASTER_FOLDER, MagicMock()
+            self.context_mock, TEST_MASTER_FOLDER, MagicMock()
         )
 
     def tearDown(self):
@@ -225,6 +263,18 @@ class TestMasterNode(unittest.TestCase):
         self.node.create_transaction.assert_called_once_with('1', 100, TYPE_TX)
         self.node._make_transaction_stamp.assert_called_once_with(tx.content)
 
+    def test_all_transactions_joins_stack_and_blocks(self):
+        self.node._blockchain = [MagicMock(), MagicMock()]
+        self.node._tx_stack = ['tx_1', 'tx_2']
+        self.node._blockchain[1].transactions = ['tx_3', 'tx_4']
+        self.node._blockchain[0].transactions = ['tx_5', 'tx_6']
+
+        txs = self.node._all_transactions()
+        self.assertListEqual(
+            list(txs),
+            ['tx_1', 'tx_2', 'tx_3', 'tx_4', 'tx_5', 'tx_6']
+        )
+
     def test_find_funds_returns_an_amount_equal_to_required_if_enough(self):
         tx_mock = MagicMock()
         tx_mock.delta_for.side_effect = [100, -100, 500]
@@ -253,43 +303,31 @@ class TestMasterNode(unittest.TestCase):
         ])
         self.assertEqual(available, 500)
 
-    def test_provokes_overdraft_returns_false_if_available_in_stack(self):
-        self.node._find_funds = MagicMock(return_value=400)
-
-        self.assertFalse(self.node._provokes_overdraft('1', 200))
-        self.assertEqual(self.node._find_funds.call_count, 1)
-
     def test_provokes_overdraft_returns_false_if_available_in_blocks(self):
         self.node._find_funds = MagicMock(side_effect=[100, 300])
-        self.node._blockchain.__reversed__ = MagicMock()
-        self.node._blockchain.__reversed__.return_value = [MagicMock()]
+        self.node._all_transactions = MagicMock(return_value=[MagicMock()] * 2)
 
         self.assertFalse(self.node._provokes_overdraft('1', 200))
         self.assertEqual(self.node._find_funds.call_count, 2)
 
     def test_provokes_overdraft_returns_true_if_overdraft(self):
         self.node._find_funds = MagicMock(side_effect=[100, 300, 300])
-        self.node._blockchain.__reversed__ = MagicMock()
-        self.node._blockchain.__reversed__.return_value = [MagicMock()] * 2
+        self.node._all_transactions = MagicMock(return_value=[MagicMock()] * 3)
 
         self.assertTrue(self.node._provokes_overdraft('1', 1000))
         self.assertEqual(self.node._find_funds.call_count, 3)
 
     def test_shall_close_current_block_returns_true_if_id_equals_chosen(self):
-        self.crypto_mock.get_closest_hash_to.return_value = self.node.id
+        self.context_mock.poll_master_node_id.return_value = self.node.id
 
         self.assertTrue(self.node._shall_close_current_block('seed'))
-        self.crypto_mock.get_closest_hash_to.assert_called_once_with(
-            'seed', self.node.context.masters_ids
-        )
+        self.context_mock.poll_master_node_id.assert_called_once_with('seed')
 
     def test_shall_close_current_block_returns_false_if_id_not_chosen(self):
-        self.crypto_mock.get_closest_hash_to.return_value = 'other_id'
+        self.context_mock.poll_master_node_id.return_value = 'other_id'
 
         self.assertFalse(self.node._shall_close_current_block('seed'))
-        self.crypto_mock.get_closest_hash_to.assert_called_once_with(
-            'seed', self.node.context.masters_ids
-        )
+        self.context_mock.poll_master_node_id.assert_called_once_with('seed')
 
     def test_create_cashbacks_transactions_creates_them_properly(self):
         self.node._create_stamped_transaction = MagicMock()
@@ -516,7 +554,7 @@ class TestMasterNode(unittest.TestCase):
         self.node._reset_transaction_stack_after_block_check(MagicMock())
 
         self.node._tx_stack.clear.assert_called_once()
-        self. node._tx_stack.push_all.assert_called_once()
+        self.node._tx_stack.push_all.assert_called_once()
 
     def test_verify_block_against_transaction_stack(self):
         self.node.get_public_key = MagicMock()
@@ -526,7 +564,7 @@ class TestMasterNode(unittest.TestCase):
 
         self.node._verify_block_against_transaction_stack([tx_1, tx_2, tx_3])
 
-        self.node._reset_transaction_stack_after_block_check\
+        self.node._reset_transaction_stack_after_block_check \
             .assert_called_once()
         tx_1.verify.assert_not_called()
         tx_2.verify.assert_not_called()
@@ -566,6 +604,17 @@ class TestMasterNode(unittest.TestCase):
         )
         self.node._tx_stack.push.assert_not_called()
 
+    def test_commit_transaction_saves_and_broadcasts_transaction(self):
+        self.node.receive_transaction = MagicMock()
+        self.node.context.broadcast_transaction_to_masters = MagicMock()
+        tx_mock = MagicMock()
+
+        self.node.commit_transaction(tx_mock)
+
+        self.node.receive_transaction.assert_called_once_with(tx_mock)
+        self.node.context.broadcast_transaction_to_masters\
+            .assert_called_once_with(self.node.id, tx_mock)
+
     def test_receive_block_verifies_it_correctly(self):
         self.node._verify_proof_of_usage = MagicMock()
         self.node._verify_block_against_transaction_stack = MagicMock()
@@ -579,7 +628,7 @@ class TestMasterNode(unittest.TestCase):
             block_mock,
             self.node._next_block_seed
         )
-        self.node._verify_block_against_transaction_stack\
+        self.node._verify_block_against_transaction_stack \
             .assert_called_once_with(block_mock.transactions)
         self.node._push_block.assert_called_once_with(block_mock)
 
@@ -636,3 +685,285 @@ class TestMasterNode(unittest.TestCase):
             self.node._next_block_seed
         )
         self.node._close_block.assert_not_called()
+
+    def test_verify_certificate_Calls_crypto_verify_correctly(self):
+        self.node.get_public_key = MagicMock()
+
+        self.node._verify_certificate('certificate', '2', '1')
+
+        self.node.get_public_key.assert_called_once_with('1')
+        self.crypto_mock.verify.assert_called_once_with(
+            '2', 'certificate', self.node.get_public_key.return_value
+        )
+
+    @patch('pikciopou.nodes.quotations.get_submit_quotation')
+    def test_get_sc_submit_quotation_returns_verified_quote(self, quote_mock):
+        bundle_mock = MagicMock()
+
+        result = self.node.get_sc_submit_quotation(bundle_mock)
+
+        bundle_mock.verify.assert_called_once_with(
+            self.node.context.get_public_key
+        )
+        self.crypto_mock.base64_decode.assert_called_once_with(
+            bundle_mock.source_b64
+        )
+        quote_mock.assert_called_once_with(self.crypto_mock.base64_decode())
+        self.assertEqual(result, quote_mock())
+
+    @patch('pikciopou.nodes.quotations.get_submit_quotation')
+    def test_get_sc_submit_quotation_raises_err_if_invalid_bundle(self,
+                                                                  quote_mock):
+        bundle_mock = MagicMock()
+        bundle_mock.verify.return_value = False
+
+        with self.assertRaises(Exception):
+            self.node.get_sc_submit_quotation(bundle_mock)
+
+        bundle_mock.verify.assert_called_once_with(
+            self.node.context.get_public_key
+        )
+        self.crypto_mock.base64_decode.assert_not_called()
+        quote_mock.assert_not_called()
+
+    @patch('pikciopou.nodes.quotations.get_exec_quotation')
+    def test_get_sc_invoke_quotation_returns_quotation(self, get_exec_mock):
+        self.node.sc_env.is_execution_granted = MagicMock()
+        self.node.sc_env.get_bin = MagicMock()
+
+        res = self.node.get_sc_invoke_quotation('sc_id', 'invoc_id', 'ep')
+
+        self.node.sc_env.get_bin.assert_called_once_with('sc_id')
+        get_exec_mock.assert_called_once_with(self.node.sc_env.get_bin(), 'ep')
+        self.assertEqual(res, get_exec_mock())
+
+    @patch('pikciopou.nodes.quotations.get_exec_quotation')
+    def test_get_sc_invoke_quotation_raises_err_forbidden(self, get_exec_mock):
+        self.node.sc_env.is_execution_granted = MagicMock(return_value=False)
+        self.node.sc_env.get_bin = MagicMock()
+
+        with self.assertRaises(ValueError):
+            self.node.get_sc_invoke_quotation('sc_id', 'invoc_id', 'ep')
+
+        self.node.sc_env.get_bin.assert_not_called()
+        get_exec_mock.assert_not_called()
+
+    def test_get_contract_abi_forwards_call_to_env(self):
+        self.node.sc_env = MagicMock()
+
+        result = self.node.get_contract_abi('sc_id')
+
+        self.node.sc_env.get_abi.assert_called_once_with('sc_id')
+        self.assertEqual(result, self.node.sc_env.get_abi())
+
+    def test_process_transaction_content_dispatches_content_properly(self):
+        self.node.sc_env = MagicMock()
+        self.node.process_sc_invocation = MagicMock()
+        self.node.process_sc_submission = MagicMock()
+        submit_ctnt = nodes.ContractSubmissionContent('1', '', 0, '', 'src')
+        invoke_ctnt = nodes.ContractInvocationContent('2', '', 0, '', '')
+        exe_ctnt = nodes.ContractExecutionContent('', '3', ExecutionInfo([]))
+
+        self.node.process_transaction_content(submit_ctnt)
+        self.node.process_transaction_content(invoke_ctnt)
+        self.node.process_transaction_content(exe_ctnt)
+
+        self.node.process_sc_submission.assert_called_once_with(submit_ctnt)
+        self.node.process_sc_invocation.assert_called_once_with(invoke_ctnt)
+        self.node.sc_env.cache_last_exec.assert_called_once_with(
+            '3', exe_ctnt.exec_info
+        )
+
+    @patch('pikciopou.nodes.ContractExecutionContent')
+    def test_create_sc_exec_transaction_packages_content(self,
+                                                         tx_content_mock):
+        package_mock = self.node._package_transaction_content = MagicMock()
+
+        tx = self.node._create_sc_exec_transaction('sc_id', 'exec_info')
+
+        tx_content_mock.assert_called_once_with(
+            sender_id=self.node.id, sc_id='sc_id', exec_info='exec_info'
+        )
+        package_mock.assert_called_once_with(tx_content_mock())
+        self.assertEqual(tx, package_mock())
+
+    def test_find_exec_info_returns_last_exec_info(self):
+        self.node.context.poll_master_node_id = MagicMock(return_value='1')
+        exec_info1 = ExecutionInfo([])
+        exec_info2 = ExecutionInfo([])
+        txs = [
+            self.node._create_sc_exec_transaction('3', exec_info1),
+            self.node._create_sc_exec_transaction('3', exec_info2),
+            self.node.create_sc_invoke_transaction(1, '3', 'abi_call')
+
+        ]
+        self.assertEqual(self.node._find_exec_info(txs, '3'), exec_info2)
+
+    def test_find_exec_info_returns_none_if_exec_info_npt_found(self):
+        self.node.context.poll_master_node_id = MagicMock(return_value='1')
+        exec_info1 = ExecutionInfo([])
+        exec_info2 = ExecutionInfo([])
+        txs = [
+            self.node._create_sc_exec_transaction('2', exec_info1),
+            self.node._create_sc_exec_transaction('4', exec_info2),
+            self.node.create_sc_invoke_transaction(1, '3', 'abi_call')
+
+        ]
+        self.assertIsNone(self.node._find_exec_info(txs, '3'))
+
+    def test_find_exec_info_stops_if_submission_found(self):
+        self.node.context.poll_master_node_id = MagicMock(return_value='1')
+        submit_tx = self.node.create_sc_submit_transaction(1, '3', 'source')
+
+        txs = [
+            submit_tx,
+            self.node.create_sc_invoke_transaction(1, '3', 'abi_call')
+
+        ]
+        with self.assertRaises(StopIteration):
+            self.node._find_exec_info(txs, submit_tx.content.tx_id)
+
+    def test_get_last_exec_info_returns_cached_one_if_any(self):
+        self.node.sc_env.get_last_exec_in_cache = MagicMock()
+        self.node._all_transactions = MagicMock()
+        self.node._find_exec_info = MagicMock()
+
+        self.assertIsNotNone(self.node._get_last_exec_info('1'))
+        self.node._all_transactions.assert_not_called()
+        self.node._find_exec_info.assert_not_called()
+
+    def test_get_last_exec_info_returns_find_exec_info_result_if_any(self):
+        self.node.sc_env.get_last_exec_in_cache = MagicMock(return_value=None)
+        self.node._all_transactions = MagicMock(return_value=['tx_group'])
+        self.node._find_exec_info = MagicMock()
+
+        self.assertEqual(
+            self.node._get_last_exec_info('1'),
+            self.node._find_exec_info()
+        )
+        self.node._all_transactions.assert_called_once()
+
+    def test_get_last_exec_info_returns_none_if_no_result(self):
+        self.node.sc_env.get_last_exec_in_cache = MagicMock(return_value=None)
+        self.node._all_transactions = MagicMock(return_value=['tx_group'])
+        self.node._find_exec_info = MagicMock(side_effect=StopIteration)
+
+        self.assertIsNone(self.node._get_last_exec_info('1'))
+        self.node._all_transactions.assert_called_once()
+        self.node._find_exec_info.assert_called_once()
+
+    def test_process_sc_submission_only_adds_in_env_if_not_recipient(self):
+        self.node.sc_env = MagicMock()
+        self.node._create_cashing_transaction = MagicMock()
+        self.node.commit_transaction = MagicMock()
+        submit_ctnt = nodes.ContractSubmissionContent('1', '2', 0, '', 'src')
+
+        self.node.process_sc_submission(submit_ctnt)
+
+        self.node.sc_env.add.assert_called_once_with(submit_ctnt.tx_id, 'src')
+        self.node._create_cashing_transaction.assert_not_called()
+        self.node.commit_transaction.assert_not_called()
+
+    def test_process_sc_submission_also_creates_cashing_tx_if_recipient(self):
+        self.node.sc_env = MagicMock()
+        self.node._create_cashing_transaction = MagicMock()
+        self.node.commit_transaction = MagicMock()
+        submit_ctnt = nodes.ContractSubmissionContent('2', '1', 30, '', 'src')
+
+        self.node.process_sc_submission(submit_ctnt)
+
+        self.node.sc_env.add.assert_called_once_with(submit_ctnt.tx_id, 'src')
+        self.node._create_cashing_transaction.assert_called_once_with(30)
+        self.node.commit_transaction.assert_called_once_with(
+            self.node._create_cashing_transaction()
+        )
+
+    @patch('pikciopou.nodes.invoke')
+    @patch('pikciopou.nodes.abi.ABI')
+    def test_process_sc_invocation_executes_saves_and_returns_result(
+            self, abi_mock, invoke_mock
+    ):
+        abi_mock.return_value.decode_call.return_value = 'endpoint', 'kwargs'
+        self.node.sc_env.get_abi = MagicMock()
+        self.node._create_sc_exec_transaction = MagicMock()
+        self.node.commit_transaction = MagicMock()
+        self.node._get_last_exec_info = MagicMock()
+
+        tx_content = nodes.ContractInvocationContent(
+            '1', '1', 1, 'sc_id', 'abi_call'
+        )
+        result = self.node.process_sc_invocation(tx_content)
+
+        self.node.sc_env.get_abi.assert_called_once_with('sc_id')
+        abi_mock.assert_called_once_with(self.node.sc_env.get_abi())
+        abi_mock().decode_call.assert_called_once_with('abi_call')
+        self.node._get_last_exec_info.assert_called_once_with('sc_id')
+        invoke_mock.assert_called_once_with(
+            self.node.sc_env.bin_folder, self.node.sc_env.abi_folder,
+            self.node._get_last_exec_info(), 'sc_id', 'endpoint', 'kwargs'
+        )
+        exec_mock = invoke_mock()
+        self.node._create_sc_exec_transaction.assert_called_once_with(
+            'sc_id', exec_mock
+        )
+        exec_tx = self.node._create_sc_exec_transaction()
+        self.node.commit_transaction.assert_called_once_with(exec_tx)
+        abi_mock().encode_call_result.assert_called_once_with(
+            exec_mock.call_info
+        )
+        self.assertEqual(result, abi_mock().encode_call_result())
+
+    @patch('pikciopou.nodes.invoke')
+    @patch('pikciopou.nodes.abi.ABI')
+    def test_process_sc_invocation_returns_if_node_not_the_one(
+            self, abi_mock, invoke_mock
+    ):
+        abi_mock.return_value.decode_call.return_value = 'endpoint', 'kwargs'
+        self.node.sc_env.get_abi = MagicMock()
+        self.node._create_sc_exec_transaction = MagicMock()
+        self.node.commit_transaction = MagicMock()
+        self.node._get_last_exec_info = MagicMock()
+
+        tx_content = nodes.ContractInvocationContent(
+            '1', '2', 1, 'sc_id', 'abi_call'
+        )
+        self.node.process_sc_invocation(tx_content)
+
+        self.node.sc_env.get_abi.assert_not_called()
+        abi_mock.assert_not_called()
+        abi_mock().decode_call.assert_not_called()
+        self.node._get_last_exec_info.assert_not_called()
+        invoke_mock.assert_not_called()
+        self.node._create_sc_exec_transaction.assert_not_called()
+        self.node.commit_transaction.assert_not_called()
+        abi_mock().encode_call_result.assert_not_called()
+
+    @patch('pikciopou.nodes.invoke')
+    @patch('pikciopou.nodes.abi.ABI')
+    def test_process_sc_invocation_raises_exception_if_exec_failure(
+            self, abi_mock, invoke_mock
+    ):
+        abi_mock.return_value.decode_call.return_value = 'endpoint', 'kwargs'
+        self.node.sc_env.get_abi = MagicMock()
+        self.node._create_sc_exec_transaction = MagicMock()
+        self.node.commit_transaction = MagicMock()
+        self.node._get_last_exec_info = MagicMock()
+        invoke_mock.return_value.success_info.is_success = False
+
+        tx_content = nodes.ContractInvocationContent(
+            '1', '1', 1, 'sc_id', 'abi_call'
+        )
+        with self.assertRaises(RuntimeError):
+            self.node.process_sc_invocation(tx_content)
+
+        self.node.sc_env.get_abi.assert_called_once_with('sc_id')
+        abi_mock.assert_called_once_with(self.node.sc_env.get_abi())
+        abi_mock().decode_call.assert_called_once_with('abi_call')
+        self.node._get_last_exec_info.assert_called_once_with('sc_id')
+        invoke_mock.assert_called_once_with(
+            self.node.sc_env.bin_folder, self.node.sc_env.abi_folder,
+            self.node._get_last_exec_info(), 'sc_id', 'endpoint', 'kwargs'
+        )
+        self.node._create_sc_exec_transaction.assert_not_called()
+        self.node.commit_transaction.assert_not_called()
+        abi_mock().encode_call_result.assert_not_called()

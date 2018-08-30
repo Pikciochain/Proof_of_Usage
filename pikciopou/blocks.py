@@ -1,13 +1,13 @@
 """Contains all block related features."""
-import json
 from datetime import datetime
 
 from pikciopou import crypto
+from pikciopou.serialization import JSONSerializable
 from pikciopou.transactions import Transaction, TYPE_CASHBACK, \
     TYPE_CASHING, TYPE_TX
 
 
-class BlockHeader(object):
+class BlockHeader(JSONSerializable):
     """The part of the block that is signed by the master node creating it."""
 
     def __init__(self, retribution_rate, previous_block_hash, merkle_root,
@@ -30,29 +30,14 @@ class BlockHeader(object):
         self.merkle_root = merkle_root
         self.closing_time = closing_time or datetime.utcnow().timestamp()
 
-    def to_json(self):
-        """Provides a JSON representation of this block header."""
-        return json.dumps(self.__dict__)
-
     @classmethod
-    def from_json(cls, json_stamp):
-        """Creates a new TransactionStamp from provided JSON string."""
-        try:
-            return cls.from_dict(json.loads(json_stamp))
-        except (TypeError, json.JSONDecodeError):
-            return None
-
-    @classmethod
-    def from_dict(cls, json_dct):
-        try:
-            return cls(
-                json_dct['retribution_rate'],
-                json_dct['previous_block_hash'],
-                json_dct['merkle_root'],
-                json_dct['closing_time'],
-            )
-        except KeyError:
-            return None
+    def from_dict_unsecure(cls, json_dct):
+        return cls(
+            json_dct['retribution_rate'],
+            json_dct['previous_block_hash'],
+            json_dct['merkle_root'],
+            json_dct['closing_time'],
+        )
 
     def __str__(self):
         """Pretty print of a block header."""
@@ -62,7 +47,7 @@ class BlockHeader(object):
         )
 
 
-class BlockStamp(object):
+class BlockStamp(JSONSerializable):
     """Stands for the security details a master node adds to a Block while
     closing it.
     """
@@ -82,28 +67,13 @@ class BlockStamp(object):
         self.master_signature = master_signature
         self.lucky_signatures = lucky_signatures
 
-    def to_json(self):
-        """Provides a JSON representation of this block header."""
-        return json.dumps(self.__dict__)
-
     @classmethod
-    def from_json(cls, json_stamp):
-        """Creates a new TransactionStamp from provided JSON string."""
-        try:
-            return cls.from_dict(json.loads(json_stamp))
-        except (TypeError, json.JSONDecodeError):
-            return None
-
-    @classmethod
-    def from_dict(cls, json_dct):
-        try:
-            return cls(
-                json_dct['master_id'],
-                json_dct['master_signature'],
-                json_dct['lucky_signatures'],
-            )
-        except KeyError:
-            return None
+    def from_dict_unsecure(cls, json_dct):
+        return cls(
+            json_dct['master_id'],
+            json_dct['master_signature'],
+            json_dct['lucky_signatures'],
+        )
 
     def __str__(self):
         """Pretty print of a block header."""
@@ -113,7 +83,7 @@ class BlockStamp(object):
         )
 
 
-class Block(object):
+class Block(JSONSerializable):
     """Stands for a block in a blockchain, a set of transactions
     validated once for all.
     """
@@ -142,8 +112,8 @@ class Block(object):
         """
         sorted_tx = sorted(self.transactions)
         all_hashes = (
-            (previous_block_hash,) +
-            tuple(crypto.get_hash(tx.to_json()) for tx in sorted_tx)
+                (previous_block_hash,) +
+                tuple(crypto.get_hash(tx.to_json()) for tx in sorted_tx)
         )
         return crypto.get_hash(''.join(all_hashes))
 
@@ -227,20 +197,18 @@ class Block(object):
 
     @property
     def regular_transactions(self):
-        """Gets the normal transactions (not cashback, cashing, fees...) of
-        this block
-        """
-        return [tx for tx in self._transactions_of_type(TYPE_TX)]
+        """Normal transactions (not cashback, cashing, fees...) of the block"""
+        return self._transactions_of_type(TYPE_TX)
 
     @property
     def cashing_transactions(self):
         """Gets the cashing transactions of this block"""
-        return [tx for tx in self._transactions_of_type(TYPE_CASHING)]
+        return self._transactions_of_type(TYPE_CASHING)
 
     @property
     def cashback_transactions(self):
         """Gets the cashback transactions of this block"""
-        return [tx for tx in self._transactions_of_type(TYPE_CASHBACK)]
+        return self._transactions_of_type(TYPE_CASHBACK)
 
     @property
     def cashback_amount(self):
@@ -252,8 +220,8 @@ class Block(object):
         """Returns the total amount of cashing returned by this block."""
         return sum(tx.content.amount for tx in self.cashing_transactions)
 
-    def to_json(self):
-        """Provides a JSON representation of this block."""
+    def to_dict(self):
+        """Provides a dict representation of this block."""
         dct = {
             'transactions': [tx.to_dict() for tx in self.transactions],
             'tx_count': len(self.transactions)
@@ -262,28 +230,15 @@ class Block(object):
             dct.update(self.header.__dict__)
         if self.stamp:
             dct.update(self.stamp.__dict__)
-        return json.dumps(dct)
+        return dct
 
     @classmethod
-    def from_json(cls, json_block):
-        """Creates a new Block from provided JSON string.
-
-        :param json_block: The dictionary covering the fields of this object.
-        :type json_block: str
-        """
-        try:
-            json_dct = json.loads(json_block)
-        except (TypeError, json.JSONDecodeError):
-            return None
-
-        try:
-            transactions = [
-                Transaction.from_dict(tx_json)
-                for tx_json in json_dct['transactions']
-            ]
-        except KeyError:
-            return None
-
+    def from_dict_unsecure(cls, json_dct):
+        """Creates a new Block from provided JSON dict."""
+        transactions = [
+            Transaction.from_dict(tx_json)
+            for tx_json in json_dct['transactions']
+        ]
         header = BlockHeader.from_dict(json_dct)
         stamp = BlockStamp.from_dict(json_dct)
         return cls(transactions, header, stamp)
